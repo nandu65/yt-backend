@@ -66,18 +66,15 @@ def sanitize(name):
 @app.post("/api/fetch")
 def fetch_video(req: FetchRequest):
 
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "cookiefile": COOKIE_PATH,
-        "extractor_args": {
-            "youtube": {"player_client": ["web"]}
-        },
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0"
-        }
+   ydl_opts = {
+    "quiet": True,
+    "no_warnings": True,
+    "skip_download": True,
+    "cookiefile": COOKIE_PATH,
+    "http_headers": {
+        "User-Agent": "Mozilla/5.0"
     }
+}
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -138,20 +135,17 @@ def download_video(req: DownloadRequest):
     filename = f"{uid}.{ext}"
     filepath = os.path.join(DOWNLOAD_DIR, filename)
 
-    ydl_opts = {
-        "format": f"{req.format_id}+bestaudio/best" if req.format_type == "video" else req.format_id,
-        "outtmpl": filepath,
-        "quiet": True,
-        "no_warnings": True,
-        "merge_output_format": ext,
-        "cookiefile": COOKIE_PATH,
-        "extractor_args": {
-            "youtube": {"player_client": ["web"]}
-        },
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0"
-        }
+   ydl_opts = {
+    "format": f"{req.format_id}+bestaudio/best" if req.format_type == "video" else req.format_id,
+    "outtmpl": filepath,
+    "quiet": True,
+    "no_warnings": True,
+    "merge_output_format": ext,
+    "cookiefile": COOKIE_PATH,
+    "http_headers": {
+        "User-Agent": "Mozilla/5.0"
     }
+}
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
