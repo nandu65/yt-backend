@@ -9,20 +9,17 @@ import uuid
 
 app = FastAPI()
 
-# -------------------------
-# CONFIG
-# -------------------------
+# ---------------- CONFIG ----------------
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 COOKIE_PATH = os.path.join(BASE_DIR, "cookies.txt")
-
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# -------------------------
-# CORS
-# -------------------------
+# ---------------- CORS ----------------
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,9 +28,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------------------------
-# MODELS
-# -------------------------
+# ---------------- MODELS ----------------
+
 class FetchRequest(BaseModel):
     url: str
 
@@ -45,36 +41,34 @@ class DownloadRequest(BaseModel):
     format_type: str
 
 
-# -------------------------
-# ROOT (for Render health)
-# -------------------------
+# ---------------- ROOT ----------------
+
 @app.get("/")
 def root():
-    return {"status": "running"}
+    return {"status": "API running"}
 
 
-# -------------------------
-# UTILS
-# -------------------------
+# ---------------- UTIL ----------------
+
 def sanitize(name):
     return re.sub(r"[^\w\-.]", "_", name)[:80]
 
 
-# =========================
-# FETCH VIDEO INFO
-# =========================
+# ---------------- FETCH ----------------
+
 @app.post("/api/fetch")
 def fetch_video(req: FetchRequest):
 
-   ydl_opts = {
-    "quiet": True,
-    "no_warnings": True,
-    "skip_download": True,
-    "cookiefile": COOKIE_PATH,
-    "http_headers": {
-        "User-Agent": "Mozilla/5.0"
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "cookiefile": COOKIE_PATH,
+        "noplaylist": True,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0"
+        }
     }
-}
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -87,6 +81,7 @@ def fetch_video(req: FetchRequest):
 
     for f in info.get("formats", []):
         if f.get("vcodec") != "none" and f.get("height"):
+
             label = f"{f['height']}p"
 
             if label not in seen:
@@ -98,15 +93,15 @@ def fetch_video(req: FetchRequest):
                 })
                 seen.add(label)
 
-    audio = [
+    audio_formats = [
         f for f in info.get("formats", [])
         if f.get("acodec") != "none" and f.get("vcodec") == "none"
     ]
 
-    if audio:
+    if audio_formats:
         qualities.append({
             "label": "Audio Only",
-            "format_id": audio[-1]["format_id"],
+            "format_id": audio_formats[-1]["format_id"],
             "type": "audio",
             "height": 0
         })
@@ -114,18 +109,17 @@ def fetch_video(req: FetchRequest):
     qualities.sort(key=lambda x: x.get("height", 0), reverse=True)
 
     return {
-        "title": info.get("title", "Unknown"),
-        "thumbnail": info.get("thumbnail", ""),
+        "title": info.get("title"),
+        "thumbnail": info.get("thumbnail"),
         "duration": info.get("duration"),
         "uploader": info.get("uploader"),
         "view_count": info.get("view_count"),
-        "qualities": qualities,
+        "qualities": qualities
     }
 
 
-# =========================
-# DOWNLOAD VIDEO
-# =========================
+# ---------------- DOWNLOAD ----------------
+
 @app.post("/api/download")
 def download_video(req: DownloadRequest):
 
@@ -135,27 +129,29 @@ def download_video(req: DownloadRequest):
     filename = f"{uid}.{ext}"
     filepath = os.path.join(DOWNLOAD_DIR, filename)
 
-   ydl_opts = {
-    "format": f"{req.format_id}+bestaudio/best" if req.format_type == "video" else req.format_id,
-    "outtmpl": filepath,
-    "quiet": True,
-    "no_warnings": True,
-    "merge_output_format": ext,
-    "cookiefile": COOKIE_PATH,
-    "http_headers": {
-        "User-Agent": "Mozilla/5.0"
+    ydl_opts = {
+        "format": f"{req.format_id}+bestaudio/best" if req.format_type == "video" else req.format_id,
+        "outtmpl": filepath,
+        "quiet": True,
+        "no_warnings": True,
+        "merge_output_format": ext,
+        "cookiefile": COOKIE_PATH,
+        "noplaylist": True,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0"
+        }
     }
-}
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(req.url, download=True)
             title = sanitize(info.get("title", "video"))
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # yt-dlp may rename extension
     if not os.path.exists(filepath):
+
         for f in os.listdir(DOWNLOAD_DIR):
             if f.startswith(uid):
                 filename = f
@@ -173,9 +169,8 @@ def download_video(req: DownloadRequest):
     }
 
 
-# =========================
-# SERVE FILE
-# =========================
+# ---------------- SERVE FILE ----------------
+
 @app.get("/downloads/{filename}")
 def serve_file(filename: str):
 
@@ -187,12 +182,10 @@ def serve_file(filename: str):
     return FileResponse(filepath, filename=filename)
 
 
-# =========================
-# START SERVER
-# =========================
+# ---------------- RUN ----------------
+
 if __name__ == "__main__":
     import uvicorn
 
     port = int(os.environ.get("PORT", 10000))
-
     uvicorn.run(app, host="0.0.0.0", port=port)
