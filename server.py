@@ -20,6 +20,7 @@ app.add_middleware(
 DOWNLOAD_DIR = "downloads"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 COOKIE_PATH = os.path.join(BASE_DIR, "cookies.txt")
+
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 class FetchRequest(BaseModel):
@@ -34,14 +35,26 @@ class DownloadRequest(BaseModel):
 def sanitize(name):
     return re.sub(r'[^\w\-.]', '_', name)[:80]
 
+
+# =========================
+# FETCH VIDEO INFO
+# =========================
 @app.post("/api/fetch")
 def fetch_video(req: FetchRequest):
+
     ydl_opts = {
-    "quiet": True,
-    "no_warnings": True,
-    "skip_download": True,
-   "cookiefile": COOKIE_PATH,
-}
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "cookiefile": COOKIE_PATH,
+        "extractor_args": {
+            "youtube": {"player_client": ["web"]}
+        },
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        }
+    }
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(req.url, download=False)
@@ -50,16 +63,31 @@ def fetch_video(req: FetchRequest):
 
     qualities = []
     seen = set()
+
     for f in info.get("formats", []):
         if f.get("vcodec") != "none" and f.get("height"):
             label = f"{f['height']}p"
             if label not in seen:
-                qualities.append({"label": label, "format_id": f["format_id"], "type": "video", "height": f["height"]})
+                qualities.append({
+                    "label": label,
+                    "format_id": f["format_id"],
+                    "type": "video",
+                    "height": f["height"]
+                })
                 seen.add(label)
 
-    audio = [f for f in info.get("formats", []) if f.get("acodec") != "none" and f.get("vcodec") == "none"]
+    audio = [
+        f for f in info.get("formats", [])
+        if f.get("acodec") != "none" and f.get("vcodec") == "none"
+    ]
+
     if audio:
-        qualities.append({"label": "Audio Only", "format_id": audio[-1]["format_id"], "type": "audio", "height": 0})
+        qualities.append({
+            "label": "Audio Only",
+            "format_id": audio[-1]["format_id"],
+            "type": "audio",
+            "height": 0
+        })
 
     qualities.sort(key=lambda x: x.get("height", 0), reverse=True)
 
@@ -72,8 +100,13 @@ def fetch_video(req: FetchRequest):
         "qualities": qualities,
     }
 
+
+# =========================
+# DOWNLOAD VIDEO
+# =========================
 @app.post("/api/download")
 def download_video(req: DownloadRequest):
+
     ext = "mp3" if req.format_type == "audio" else "mp4"
     uid = str(uuid.uuid4())[:8]
     filename = f"{uid}.{ext}"
@@ -86,6 +119,12 @@ def download_video(req: DownloadRequest):
         "no_warnings": True,
         "merge_output_format": ext,
         "cookiefile": COOKIE_PATH,
+        "extractor_args": {
+            "youtube": {"player_client": ["web"]}
+        },
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        }
     }
 
     try:
@@ -95,7 +134,7 @@ def download_video(req: DownloadRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # yt-dlp may add extension
+    # yt-dlp may adjust extension
     if not os.path.exists(filepath):
         for f in os.listdir(DOWNLOAD_DIR):
             if f.startswith(uid):
@@ -107,14 +146,23 @@ def download_video(req: DownloadRequest):
         raise HTTPException(status_code=500, detail="Download failed - file not found")
 
     safe_name = f"{title}_{req.quality_label}.{ext}"
-    return {"download_url": f"/downloads/{filename}", "filename": safe_name}
 
+    return {
+        "download_url": f"/downloads/{filename}",
+        "filename": safe_name
+    }
+
+
+# =========================
+# SERVE FILE
+# =========================
 @app.get("/downloads/{filename}")
 def serve_file(filename: str):
     filepath = os.path.join(DOWNLOAD_DIR, filename)
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(filepath, filename=filename)
+
 
 if __name__ == "__main__":
     import uvicorn
