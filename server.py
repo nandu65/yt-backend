@@ -34,7 +34,12 @@ def sanitize(name):
 
 @app.post("/api/fetch")
 def fetch_video(req: FetchRequest):
-    ydl_opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    ydl_opts = {
+    "quiet": True,
+    "no_warnings": True,
+    "skip_download": True,
+    "cookiefile": "cookies.txt"
+}
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(req.url, download=False)
@@ -78,6 +83,7 @@ def download_video(req: DownloadRequest):
         "quiet": True,
         "no_warnings": True,
         "merge_output_format": ext,
+        "cookiefile": "cookies.txt",
     }
 
     try:
