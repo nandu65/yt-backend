@@ -9,6 +9,20 @@ import uuid
 
 app = FastAPI()
 
+# -------------------------
+# CONFIG
+# -------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
+COOKIE_PATH = os.path.join(BASE_DIR, "cookies.txt")
+
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# -------------------------
+# CORS
+# -------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,14 +31,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DOWNLOAD_DIR = "downloads"
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-COOKIE_PATH = os.path.join(BASE_DIR, "cookies.txt")
-
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
+# -------------------------
+# MODELS
+# -------------------------
 class FetchRequest(BaseModel):
     url: str
+
 
 class DownloadRequest(BaseModel):
     url: str
@@ -32,8 +44,20 @@ class DownloadRequest(BaseModel):
     quality_label: str
     format_type: str
 
+
+# -------------------------
+# ROOT (for Render health)
+# -------------------------
+@app.get("/")
+def root():
+    return {"status": "running"}
+
+
+# -------------------------
+# UTILS
+# -------------------------
 def sanitize(name):
-    return re.sub(r'[^\w\-.]', '_', name)[:80]
+    return re.sub(r"[^\w\-.]", "_", name)[:80]
 
 
 # =========================
@@ -51,7 +75,7 @@ def fetch_video(req: FetchRequest):
             "youtube": {"player_client": ["web"]}
         },
         "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0"
         }
     }
 
@@ -67,6 +91,7 @@ def fetch_video(req: FetchRequest):
     for f in info.get("formats", []):
         if f.get("vcodec") != "none" and f.get("height"):
             label = f"{f['height']}p"
+
             if label not in seen:
                 qualities.append({
                     "label": label,
@@ -108,6 +133,7 @@ def fetch_video(req: FetchRequest):
 def download_video(req: DownloadRequest):
 
     ext = "mp3" if req.format_type == "audio" else "mp4"
+
     uid = str(uuid.uuid4())[:8]
     filename = f"{uid}.{ext}"
     filepath = os.path.join(DOWNLOAD_DIR, filename)
@@ -123,7 +149,7 @@ def download_video(req: DownloadRequest):
             "youtube": {"player_client": ["web"]}
         },
         "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0"
         }
     }
 
@@ -134,7 +160,7 @@ def download_video(req: DownloadRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # yt-dlp may adjust extension
+    # yt-dlp may rename extension
     if not os.path.exists(filepath):
         for f in os.listdir(DOWNLOAD_DIR):
             if f.startswith(uid):
@@ -143,12 +169,12 @@ def download_video(req: DownloadRequest):
                 break
 
     if not os.path.exists(filepath):
-        raise HTTPException(status_code=500, detail="Download failed - file not found")
+        raise HTTPException(status_code=500, detail="Download failed")
 
     safe_name = f"{title}_{req.quality_label}.{ext}"
 
     return {
-        "download_url": f"/downloads/{filename}",
+        "download_url": f"{BASE_URL}/downloads/{filename}",
         "filename": safe_name
     }
 
@@ -158,12 +184,21 @@ def download_video(req: DownloadRequest):
 # =========================
 @app.get("/downloads/{filename}")
 def serve_file(filename: str):
+
     filepath = os.path.join(DOWNLOAD_DIR, filename)
+
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="File not found")
+
     return FileResponse(filepath, filename=filename)
 
 
+# =========================
+# START SERVER
+# =========================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    port = int(os.environ.get("PORT", 10000))
+
+    uvicorn.run(app, host="0.0.0.0", port=port)
