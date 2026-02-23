@@ -129,8 +129,14 @@ def download_video(req: DownloadRequest):
     filename = f"{uid}.{ext}"
     filepath = os.path.join(DOWNLOAD_DIR, filename)
 
+    # safer format selection
+    if req.format_type == "video":
+        format_string = f"{req.format_id}+bestaudio/best/bestvideo+bestaudio"
+    else:
+        format_string = req.format_id
+
     ydl_opts = {
-        "format": f"{req.format_id}+bestaudio/best" if req.format_type == "video" else req.format_id,
+        "format": format_string,
         "outtmpl": filepath,
         "quiet": True,
         "no_warnings": True,
