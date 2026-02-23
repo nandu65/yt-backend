@@ -18,6 +18,8 @@ app.add_middleware(
 )
 
 DOWNLOAD_DIR = "downloads"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+COOKIE_PATH = os.path.join(BASE_DIR, "cookies.txt")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 class FetchRequest(BaseModel):
@@ -38,7 +40,7 @@ def fetch_video(req: FetchRequest):
     "quiet": True,
     "no_warnings": True,
     "skip_download": True,
-    "cookiefile": "cookies.txt"
+   "cookiefile": COOKIE_PATH,
 }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -83,7 +85,7 @@ def download_video(req: DownloadRequest):
         "quiet": True,
         "no_warnings": True,
         "merge_output_format": ext,
-        "cookiefile": "cookies.txt",
+        "cookiefile": COOKIE_PATH,
     }
 
     try:
