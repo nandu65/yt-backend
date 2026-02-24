@@ -3,3 +3,4 @@ uvicorn
 yt-dlp
 pydantic
 python-multipart
+yt-dlp>=2025.1.1
