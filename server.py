@@ -74,7 +74,11 @@ def get_ydl_opts(extra=None):
 # =========================
 @app.post("/api/fetch")
 def fetch_video(req: FetchRequest):
-    ydl_opts = get_ydl_opts({"skip_download": True})
+   ydl_opts = get_ydl_opts({
+    "skip_download": True,
+    "ignore_no_formats_error": True,
+    "format": None,
+})
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
