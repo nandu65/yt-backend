@@ -69,15 +69,17 @@ def get_ydl_opts(extra=None):
         opts.update(extra)
     return opts
 
+
 # =========================
 # FETCH VIDEO INFO
 # =========================
 @app.post("/api/fetch")
 def fetch_video(req: FetchRequest):
+
     ydl_opts = get_ydl_opts({
         "skip_download": True,
-        "ignore_no_formats_error": True,  # critical
-        "format": None,                   # critical
+        "ignore_no_formats_error": True,
+        "format": None,
     })
 
     try:
@@ -88,36 +90,20 @@ def fetch_video(req: FetchRequest):
 
     formats = info.get("formats") or []
     if not formats:
-        raise HTTPException(status_code=400, detail="No downloadable formats found for this video.")
+        raise HTTPException(status_code=400, detail="No downloadable formats found.")
 
-    # pick best candidate per height (prefer mp4/http when available)
-   by_height = {}
+    by_height = {}
 
-for f in formats:
-    if f.get("vcodec") == "none":
-        continue
-    if not f.get("format_id"):
-        continue
-    height = f.get("height")
-    if not height:
-        continue
+    for f in formats:
+        if f.get("vcodec") == "none":
+            continue
+        if not f.get("format_id"):
+            continue
+        if not f.get("height"):
+            continue
 
-    h = int(height)
-
-    if h not in by_height:
-        by_height[h] = f
         h = int(f["height"])
-        prev = by_height.get(h)
-
-        def score(x):
-            return (
-                1 if x.get("ext") == "mp4" else 0,
-                1 if str(x.get("protocol", "")).startswith(("http", "https")) else 0,
-                int(x.get("fps") or 0),
-                float(x.get("tbr") or 0),
-            )
-
-        if prev is None or score(f) > score(prev):
+        if h not in by_height:
             by_height[h] = f
 
     qualities = [
@@ -130,10 +116,14 @@ for f in formats:
         for h, f in sorted(by_height.items(), key=lambda x: x[0], reverse=True)
     ]
 
+    # Audio only
     audio_candidates = [
         f for f in formats
-        if f.get("acodec") != "none" and f.get("vcodec") == "none" and f.get("format_id")
+        if f.get("acodec") != "none"
+        and f.get("vcodec") == "none"
+        and f.get("format_id")
     ]
+
     if audio_candidates:
         best_audio = max(audio_candidates, key=lambda x: float(x.get("abr") or 0))
         qualities.append({
@@ -153,8 +143,12 @@ for f in formats:
     }
 
 
+# =========================
+# DOWNLOAD VIDEO
+# =========================
 @app.post("/api/download")
 def download_video(req: DownloadRequest):
+
     ext = "mp3" if req.format_type == "audio" else "mp4"
     uid = str(uuid.uuid4())[:8]
     filename = f"{uid}.{ext}"
@@ -179,7 +173,6 @@ def download_video(req: DownloadRequest):
 
     for fmt in format_attempts:
         try:
-            # cleanup partial file before retry
             if os.path.exists(filepath):
                 os.remove(filepath)
 
@@ -192,6 +185,7 @@ def download_video(req: DownloadRequest):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(req.url, download=True)
             break
+
         except Exception as e:
             last_error = e
             continue
@@ -201,7 +195,6 @@ def download_video(req: DownloadRequest):
 
     title = sanitize(info.get("title", "video"))
 
-    # yt-dlp may rename extension/container
     if not os.path.exists(filepath):
         for f in os.listdir(DOWNLOAD_DIR):
             if f.startswith(uid):
@@ -210,7 +203,7 @@ def download_video(req: DownloadRequest):
                 break
 
     if not os.path.exists(filepath):
-        raise HTTPException(status_code=500, detail="Download failed — file not found after processing.")
+        raise HTTPException(status_code=500, detail="Download failed — file not found.")
 
     safe_name = f"{title}_{req.quality_label}.{ext}"
 
@@ -219,15 +212,17 @@ def download_video(req: DownloadRequest):
         "filename": safe_name,
     }
 
+
 # =========================
 # SERVE FILE
-# ========================= 
+# =========================
 @app.get("/downloads/{filename}")
 def serve_file(filename: str):
     filepath = os.path.join(DOWNLOAD_DIR, filename)
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(filepath, filename=filename)
+
 
 # =========================
 # START SERVER
