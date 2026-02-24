@@ -91,10 +91,21 @@ def fetch_video(req: FetchRequest):
         raise HTTPException(status_code=400, detail="No downloadable formats found for this video.")
 
     # pick best candidate per height (prefer mp4/http when available)
-    by_height = {}
-    for f in formats:
-        if f.get("vcodec") == "none" or not f.get("height") or not f.get("format_id"):
-            continue
+   by_height = {}
+
+for f in formats:
+    if f.get("vcodec") == "none":
+        continue
+    if not f.get("format_id"):
+        continue
+    height = f.get("height")
+    if not height:
+        continue
+
+    h = int(height)
+
+    if h not in by_height:
+        by_height[h] = f
         h = int(f["height"])
         prev = by_height.get(h)
 
