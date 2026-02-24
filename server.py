@@ -74,11 +74,11 @@ def get_ydl_opts(extra=None):
 # =========================
 @app.post("/api/fetch")
 def fetch_video(req: FetchRequest):
-   ydl_opts = get_ydl_opts({
-    "skip_download": True,
-    "ignore_no_formats_error": True,
-    "format": None,
-})
+    ydl_opts = get_ydl_opts({
+        "skip_download": True,
+        "ignore_no_formats_error": True,  # critical
+        "format": None,                   # critical
+    })
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -86,34 +86,51 @@ def fetch_video(req: FetchRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    qualities = []
-    seen = set()
+    formats = info.get("formats") or []
+    if not formats:
+        raise HTTPException(status_code=400, detail="No downloadable formats found for this video.")
 
-    for f in info.get("formats", []):
-        if f.get("vcodec") != "none" and f.get("height"):
-            label = f"{f['height']}p"
-            if label not in seen:
-                qualities.append({
-                    "label": label,
-                    "format_id": f["format_id"],
-                    "type": "video",
-                    "height": f["height"],
-                })
-                seen.add(label)
+    # pick best candidate per height (prefer mp4/http when available)
+    by_height = {}
+    for f in formats:
+        if f.get("vcodec") == "none" or not f.get("height") or not f.get("format_id"):
+            continue
+        h = int(f["height"])
+        prev = by_height.get(h)
 
-    audio = [
-        f for f in info.get("formats", [])
-        if f.get("acodec") != "none" and f.get("vcodec") == "none"
+        def score(x):
+            return (
+                1 if x.get("ext") == "mp4" else 0,
+                1 if str(x.get("protocol", "")).startswith(("http", "https")) else 0,
+                int(x.get("fps") or 0),
+                float(x.get("tbr") or 0),
+            )
+
+        if prev is None or score(f) > score(prev):
+            by_height[h] = f
+
+    qualities = [
+        {
+            "label": f"{h}p",
+            "format_id": f["format_id"],
+            "type": "video",
+            "height": h,
+        }
+        for h, f in sorted(by_height.items(), key=lambda x: x[0], reverse=True)
     ]
-    if audio:
+
+    audio_candidates = [
+        f for f in formats
+        if f.get("acodec") != "none" and f.get("vcodec") == "none" and f.get("format_id")
+    ]
+    if audio_candidates:
+        best_audio = max(audio_candidates, key=lambda x: float(x.get("abr") or 0))
         qualities.append({
             "label": "Audio Only",
-            "format_id": audio[-1]["format_id"],
+            "format_id": best_audio["format_id"],
             "type": "audio",
             "height": 0,
         })
-
-    qualities.sort(key=lambda x: x.get("height", 0), reverse=True)
 
     return {
         "title": info.get("title", "Unknown"),
@@ -124,9 +141,7 @@ def fetch_video(req: FetchRequest):
         "qualities": qualities,
     }
 
-# =========================
-# DOWNLOAD VIDEO
-# =========================
+
 @app.post("/api/download")
 def download_video(req: DownloadRequest):
     ext = "mp3" if req.format_type == "audio" else "mp4"
@@ -134,22 +149,48 @@ def download_video(req: DownloadRequest):
     filename = f"{uid}.{ext}"
     filepath = os.path.join(DOWNLOAD_DIR, filename)
 
-    fmt = f"{req.format_id}+bestaudio/best" if req.format_type == "video" else req.format_id
+    if req.format_type == "video":
+        format_attempts = [
+            f"{req.format_id}+bestaudio/best",
+            f"{req.format_id}/best",
+            "bestvideo+bestaudio/best",
+            "best",
+        ]
+    else:
+        format_attempts = [
+            req.format_id,
+            "bestaudio/best",
+            "best",
+        ]
 
-    ydl_opts = get_ydl_opts({
-        "format": fmt,
-        "outtmpl": filepath,
-        "merge_output_format": ext,
-    })
+    info = None
+    last_error = None
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(req.url, download=True)
-            title = sanitize(info.get("title", "video"))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    for fmt in format_attempts:
+        try:
+            # cleanup partial file before retry
+            if os.path.exists(filepath):
+                os.remove(filepath)
 
-    # yt-dlp may rename extension
+            ydl_opts = get_ydl_opts({
+                "format": fmt,
+                "outtmpl": filepath,
+                "merge_output_format": ext,
+            })
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(req.url, download=True)
+            break
+        except Exception as e:
+            last_error = e
+            continue
+
+    if info is None:
+        raise HTTPException(status_code=500, detail=str(last_error) if last_error else "Download failed.")
+
+    title = sanitize(info.get("title", "video"))
+
+    # yt-dlp may rename extension/container
     if not os.path.exists(filepath):
         for f in os.listdir(DOWNLOAD_DIR):
             if f.startswith(uid):
