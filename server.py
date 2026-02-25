@@ -6,28 +6,24 @@ import logging
 from pathlib import Path
 from fastapi import FastAPI, APIRouter, HTTPException
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+# ---------- BASIC SETUP ----------
 
-DOWNLOADS_DIR = Path("/app/downloads")
+ROOT_DIR = Path(__file__).parent
+DOWNLOADS_DIR = ROOT_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
-
-app = FastAPI(title="Zenith Downloader API")
+app = FastAPI(title="YouTube Downloader API")
 api_router = APIRouter(prefix="/api")
 
+
+# ---------- MODELS ----------
 
 class FetchRequest(BaseModel):
     url: str
@@ -62,10 +58,14 @@ class DownloadResult(BaseModel):
     message: str
 
 
+# ---------- ROOT ----------
+
 @api_router.get("/")
 async def root():
-    return {"message": "Zenith Downloader API"}
+    return {"message": "YouTube Downloader API is running"}
 
+
+# ---------- FETCH VIDEO INFO ----------
 
 @api_router.post("/fetch", response_model=VideoInfo)
 async def fetch_video(req: FetchRequest):
@@ -75,22 +75,15 @@ async def fetch_video(req: FetchRequest):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-        except asyncio.TimeoutError:
-            proc.kill()
-            raise HTTPException(status_code=408, detail="Request timed out. Please try again.")
+
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
 
         if proc.returncode != 0:
-            err = stderr.decode(errors="replace").strip()
-            logger.error(f"yt-dlp fetch error: {err}")
-            detail = err.split('\n')[-1] if err else "Failed to fetch video info."
-            raise HTTPException(status_code=400, detail=detail)
+            raise HTTPException(status_code=400, detail="Failed to fetch video info.")
 
         data = json.loads(stdout.decode(errors="replace"))
         formats = data.get("formats", [])
 
-        # Collect unique heights with video codec
         available_heights = set()
         for fmt in formats:
             h = fmt.get("height")
@@ -100,7 +93,7 @@ async def fetch_video(req: FetchRequest):
 
         height_labels = [
             (2160, "4K (2160p)"),
-            (1440, "1440p (2K)"),
+            (1440, "1440p"),
             (1080, "1080p"),
             (720, "720p"),
             (480, "480p"),
@@ -109,6 +102,7 @@ async def fetch_video(req: FetchRequest):
         ]
 
         quality_options = []
+
         for target_h, label in height_labels:
             if any(h >= target_h for h in available_heights):
                 quality_options.append(QualityOption(
@@ -118,7 +112,6 @@ async def fetch_video(req: FetchRequest):
                     height=target_h
                 ))
 
-        # Fallback if no video formats detected
         if not quality_options:
             quality_options.append(QualityOption(
                 label="Best Quality",
@@ -127,7 +120,6 @@ async def fetch_video(req: FetchRequest):
                 height=9999
             ))
 
-        # Always add MP3 audio option
         quality_options.append(QualityOption(
             label="Audio only (MP3)",
             format_id="bestaudio/best",
@@ -144,14 +136,14 @@ async def fetch_video(req: FetchRequest):
             qualities=quality_options
         )
 
-    except HTTPException:
-        raise
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Could not parse video info. URL may be unsupported.")
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=408, detail="Request timed out.")
     except Exception as e:
         logger.error(f"Fetch error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Something went wrong while fetching video.")
 
+
+# ---------- DOWNLOAD VIDEO ----------
 
 @api_router.post("/download", response_model=DownloadResult)
 async def download_video(req: DownloadRequest):
@@ -163,10 +155,10 @@ async def download_video(req: DownloadRequest):
             cmd = [
                 "yt-dlp",
                 "-f", req.format_id,
-                "--extract-audio", "--audio-format", "mp3",
+                "--extract-audio",
+                "--audio-format", "mp3",
                 "-o", output_template,
                 "--no-playlist",
-                "--ffmpeg-location", "/usr/bin/ffmpeg",
                 req.url.strip()
             ]
         else:
@@ -176,35 +168,26 @@ async def download_video(req: DownloadRequest):
                 "-o", output_template,
                 "--no-playlist",
                 "--merge-output-format", "mp4",
-                "--ffmpeg-location", "/usr/bin/ffmpeg",
                 req.url.strip()
             ]
-
-        logger.info(f"Starting download: {req.quality_label} - {req.url[:50]}")
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
-        except asyncio.TimeoutError:
-            proc.kill()
-            raise HTTPException(status_code=408, detail="Download timed out (10 min limit). Try a lower quality.")
+
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
 
         if proc.returncode != 0:
-            err = stderr.decode(errors="replace").strip()
-            logger.error(f"yt-dlp download error: {err}")
-            detail = err.split('\n')[-1] if err else "Download failed."
-            raise HTTPException(status_code=400, detail=detail)
+            raise HTTPException(status_code=400, detail="Download failed.")
 
         downloaded_files = list(DOWNLOADS_DIR.glob(f"{file_id}.*"))
+
         if not downloaded_files:
-            raise HTTPException(status_code=500, detail="Downloaded file not found on server.")
+            raise HTTPException(status_code=500, detail="Downloaded file not found.")
 
         filename = downloaded_files[0].name
-        logger.info(f"Download complete: {filename}")
 
         return DownloadResult(
             filename=filename,
@@ -212,25 +195,32 @@ async def download_video(req: DownloadRequest):
             message="Download complete!"
         )
 
-    except HTTPException:
-        raise
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=408, detail="Download timed out.")
     except Exception as e:
         logger.error(f"Download error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Something went wrong while downloading.")
 
+
+# ---------- CORS ----------
 
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---------- ROUTES ----------
 
 app.include_router(api_router)
 app.mount("/api/files", StaticFiles(directory=str(DOWNLOADS_DIR)), name="files")
 
 
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+# ---------- RENDER ENTRY ----------
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("server:app", host="0.0.0.0", port=port)
