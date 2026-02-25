@@ -60,7 +60,11 @@ def get_ydl_opts(extra=None):
         "quiet": True,
         "no_warnings": True,
         "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
         },
     }
     if os.path.exists(COOKIE_PATH):
@@ -70,12 +74,24 @@ def get_ydl_opts(extra=None):
     return opts
 
 
+def score_format(f):
+    """Higher score = preferred format for a given resolution."""
+    score = 0
+    ext = (f.get("ext") or "").lower()
+    protocol = (f.get("protocol") or "").lower()
+    if ext == "mp4":
+        score += 10
+    if "http" in protocol:
+        score += 5
+    score += float(f.get("tbr") or f.get("vbr") or 0)
+    return score
+
+
 # =========================
 # FETCH VIDEO INFO
 # =========================
 @app.post("/api/fetch")
 def fetch_video(req: FetchRequest):
-
     ydl_opts = get_ydl_opts({
         "skip_download": True,
         "ignore_no_formats_error": True,
@@ -92,43 +108,79 @@ def fetch_video(req: FetchRequest):
     if not formats:
         raise HTTPException(status_code=400, detail="No downloadable formats found.")
 
+    # ---- Video formats ----
     by_height = {}
 
     for f in formats:
-        if f.get("vcodec") == "none":
+        # Skip audio-only
+        vcodec = f.get("vcodec") or "none"
+        if vcodec == "none":
             continue
         if not f.get("format_id"):
             continue
-        if not f.get("height"):
+
+        # Try to get height from multiple fields
+        h = f.get("height")
+        if not h:
+            # Try to parse from format_note like "720p"
+            note = f.get("format_note") or ""
+            m = re.search(r"(\d{3,4})p", note)
+            if m:
+                h = int(m.group(1))
+        if not h:
+            # Try resolution string like "1280x720"
+            res = f.get("resolution") or ""
+            m = re.search(r"(\d+)x(\d+)", res)
+            if m:
+                h = int(m.group(2))
+        if not h:
             continue
 
-        h = int(f["height"])
-        if h not in by_height:
+        h = int(h)
+
+        if h not in by_height or score_format(f) > score_format(by_height[h]):
             by_height[h] = f
 
     qualities = [
         {
             "label": f"{h}p",
-            "format_id": f["format_id"],
+            "format_id": fmt["format_id"],
             "type": "video",
             "height": h,
         }
-        for h, f in sorted(by_height.items(), key=lambda x: x[0], reverse=True)
+        for h, fmt in sorted(by_height.items(), key=lambda x: x[0], reverse=True)
     ]
 
-    # Audio only
+    # ---- Fallback: if no per-resolution formats, add generic best ----
+    if not qualities:
+        qualities.append({
+            "label": "Best Available",
+            "format_id": "bestvideo",
+            "type": "video",
+            "height": 9999,
+        })
+
+    # ---- Audio only ----
     audio_candidates = [
         f for f in formats
-        if f.get("acodec") != "none"
-        and f.get("vcodec") == "none"
+        if (f.get("acodec") or "none") != "none"
+        and (f.get("vcodec") or "none") == "none"
         and f.get("format_id")
     ]
 
     if audio_candidates:
-        best_audio = max(audio_candidates, key=lambda x: float(x.get("abr") or 0))
+        best_audio = max(audio_candidates, key=lambda x: float(x.get("abr") or x.get("tbr") or 0))
         qualities.append({
             "label": "Audio Only",
             "format_id": best_audio["format_id"],
+            "type": "audio",
+            "height": 0,
+        })
+    else:
+        # Always offer audio option
+        qualities.append({
+            "label": "Audio Only",
+            "format_id": "bestaudio",
             "type": "audio",
             "height": 0,
         })
@@ -148,7 +200,6 @@ def fetch_video(req: FetchRequest):
 # =========================
 @app.post("/api/download")
 def download_video(req: DownloadRequest):
-
     ext = "mp3" if req.format_type == "audio" else "mp4"
     uid = str(uuid.uuid4())[:8]
     filename = f"{uid}.{ext}"
@@ -156,15 +207,18 @@ def download_video(req: DownloadRequest):
 
     if req.format_type == "video":
         format_attempts = [
+            f"{req.format_id}+bestaudio[ext=m4a]/best",
             f"{req.format_id}+bestaudio/best",
             f"{req.format_id}/best",
+            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
             "bestvideo+bestaudio/best",
             "best",
         ]
     else:
         format_attempts = [
+            f"{req.format_id}/bestaudio",
             req.format_id,
-            "bestaudio/best",
+            "bestaudio[ext=m4a]/bestaudio/best",
             "best",
         ]
 
@@ -173,42 +227,46 @@ def download_video(req: DownloadRequest):
 
     for fmt in format_attempts:
         try:
+            # Clean up partial file from previous attempt
             if os.path.exists(filepath):
                 os.remove(filepath)
 
             ydl_opts = get_ydl_opts({
                 "format": fmt,
-                "outtmpl": filepath,
+                "outtmpl": filepath.rsplit(".", 1)[0] + ".%(ext)s",
                 "merge_output_format": ext,
             })
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(req.url, download=True)
             break
-
         except Exception as e:
             last_error = e
             continue
 
     if info is None:
-        raise HTTPException(status_code=500, detail=str(last_error) if last_error else "Download failed.")
+        raise HTTPException(
+            status_code=500,
+            detail=str(last_error) if last_error else "Download failed.",
+        )
 
     title = sanitize(info.get("title", "video"))
 
-    if not os.path.exists(filepath):
-        for f in os.listdir(DOWNLOAD_DIR):
-            if f.startswith(uid):
-                filename = f
-                filepath = os.path.join(DOWNLOAD_DIR, f)
-                break
+    # Find the actual downloaded file (extension might differ)
+    actual_file = None
+    for f in os.listdir(DOWNLOAD_DIR):
+        if f.startswith(uid):
+            actual_file = f
+            break
 
-    if not os.path.exists(filepath):
+    if not actual_file:
         raise HTTPException(status_code=500, detail="Download failed — file not found.")
 
-    safe_name = f"{title}_{req.quality_label}.{ext}"
+    actual_ext = actual_file.rsplit(".", 1)[-1] if "." in actual_file else ext
+    safe_name = f"{title}_{req.quality_label}.{actual_ext}"
 
     return {
-        "download_url": f"/downloads/{filename}",
+        "download_url": f"/downloads/{actual_file}",
         "filename": safe_name,
     }
 
