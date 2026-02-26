@@ -18,6 +18,8 @@ app.add_middleware(
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+COOKIES_FILE = "cookies.txt"
+
 
 class URLRequest(BaseModel):
     url: str
@@ -31,7 +33,12 @@ class DownloadRequest(BaseModel):
 @app.post("/api/fetch")
 def fetch_video_info(req: URLRequest):
     try:
-        ydl_opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "cookiefile": COOKIES_FILE,
+        }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(req.url, download=False)
 
@@ -83,6 +90,7 @@ def download_video(req: DownloadRequest):
             "outtmpl": output_path,
             "quiet": True,
             "merge_output_format": "mp4",
+            "cookiefile": COOKIES_FILE,
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
