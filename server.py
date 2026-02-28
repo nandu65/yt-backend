@@ -16,9 +16,8 @@ app.add_middleware(
 )
 
 DOWNLOAD_DIR = "downloads"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
 COOKIES_FILE = "cookies.txt"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 
 class URLRequest(BaseModel):
@@ -38,6 +37,7 @@ def fetch_video_info(req: URLRequest):
             "no_warnings": True,
             "skip_download": True,
             "cookiefile": COOKIES_FILE,
+            "format": "best",
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(req.url, download=False)
