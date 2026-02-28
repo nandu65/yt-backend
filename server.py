@@ -20,6 +20,12 @@ COOKIES_FILE = "cookies.txt"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 
+def get_cookie_opts():
+    if os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 0:
+        return {"cookiefile": COOKIES_FILE}
+    return {}
+
+
 class URLRequest(BaseModel):
     url: str
 
@@ -36,7 +42,8 @@ def fetch_video_info(req: URLRequest):
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
-            "cookiefile": COOKIES_FILE,
+            "format": "bestaudio+bestvideo/best",
+            **get_cookie_opts(),
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(req.url, download=False)
@@ -89,7 +96,7 @@ def download_video(req: DownloadRequest):
             "outtmpl": output_path,
             "quiet": True,
             "merge_output_format": "mp4",
-            "cookiefile": COOKIES_FILE,
+            **get_cookie_opts(),
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
